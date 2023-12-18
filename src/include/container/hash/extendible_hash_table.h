@@ -196,6 +196,7 @@ class ExtendibleHashTable : public HashTable<K, V> {
   auto GetGlobalDepthInternal() const -> int;
   auto GetLocalDepthInternal(int dir_index) const -> int;
   auto GetNumBucketsInternal() const -> int;
+  auto GetIndexBucket(int dir_index) const -> std::shared_ptr<Bucket>;
 };
 
 }  // namespace bustub
