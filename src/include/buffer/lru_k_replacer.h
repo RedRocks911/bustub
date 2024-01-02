@@ -19,10 +19,24 @@
 #include <vector>
 
 #include "common/config.h"
+#include "common/logger.h"
 #include "common/macros.h"
 
 namespace bustub {
+class Node {
+ public:
+  frame_id_t key_{0};
+  size_t value_{0};
+  bool evictable_{false};
+  Node *prev_{nullptr};
+  Node *next_{nullptr};
 
+  explicit Node(frame_id_t key = 0, size_t value = 0, bool evictable = false) {
+    key_ = key;
+    value_ = value;
+    evictable_ = evictable;
+  }
+};
 /**
  * LRUKReplacer implements the LRU-k replacement policy.
  *
@@ -52,7 +66,7 @@ class LRUKReplacer {
    *
    * @brief Destroys the LRUReplacer.
    */
-  ~LRUKReplacer() = default;
+  ~LRUKReplacer();
 
   /**
    * TODO(P1): Add implementation
@@ -135,11 +149,58 @@ class LRUKReplacer {
  private:
   // TODO(student): implement me! You can replace these member variables as you like.
   // Remove maybe_unused if you start using them.
-  [[maybe_unused]] size_t current_timestamp_{0};
-  [[maybe_unused]] size_t curr_size_{0};
-  [[maybe_unused]] size_t replacer_size_;
-  [[maybe_unused]] size_t k_;
+  // [[maybe_unused]] size_t current_timestamp_{0};
+  size_t curr_history_size_{0};  // the number of history pool evictable frames
+  size_t curr_buffer_size_{0};   // the number of buffer pool evictable frames
+  size_t replacer_size_;         // the capacity of evictable frames in LRUReplacer
+  size_t k_;
+  Node *dummy_history_;
+  Node *dummy_buffer_;
+  std::unordered_map<frame_id_t, Node *> entries_;
   std::mutex latch_;
+  auto EvictInternal(frame_id_t *frame_id) -> bool;
+
+  void RemoveFromPool(Node *x) {
+    if (x->prev_ == nullptr || x->next_ == nullptr) {
+      return;
+    }
+    LOG_INFO("RemoveFromPool (key)%d, (value)%ld#", x->key_, x->value_);
+    x->prev_->next_ = x->next_;
+    x->next_->prev_ = x->prev_;
+    x->prev_ = nullptr;
+    x->next_ = nullptr;
+  }
+
+  void PushFrontHistoryPool(Node *x) {
+    LOG_INFO("PushFrontHistoryPool (key)%d, (value)%ld#", x->key_, x->value_);
+    dummy_history_->next_->prev_ = x;
+    x->next_ = dummy_history_->next_;
+    dummy_history_->next_ = x;
+    x->prev_ = dummy_history_;
+  }
+
+  void PushFrontBufferPool(Node *x) {
+    LOG_INFO("PushFrontBufferPool (key)%d, (value)%ld#", x->key_, x->value_);
+    dummy_buffer_->next_->prev_ = x;
+    x->next_ = dummy_buffer_->next_;
+    dummy_buffer_->next_ = x;
+    x->prev_ = dummy_buffer_;
+  }
+
+  /*Node *get_node(frame_id_t key) {
+    auto it = entries_.find(key);
+    if (it == entries_.end()) {
+      return nullptr;
+    }
+    auto node = it->second;
+    if (node->evictable_) {
+      node->value_++;
+      if (node->value_ >= k_) {
+        RemoveFromLink(node);
+        push_after_node(node, dummy_buffer_);
+      }
+    }
+  }*/
 };
 
 }  // namespace bustub
