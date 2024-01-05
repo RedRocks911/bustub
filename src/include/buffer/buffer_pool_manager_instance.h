@@ -19,6 +19,7 @@
 #include "buffer/buffer_pool_manager.h"
 #include "buffer/lru_k_replacer.h"
 #include "common/config.h"
+#include "common/logger.h"
 #include "container/hash/extendible_hash_table.h"
 #include "recovery/log_manager.h"
 #include "storage/disk/disk_manager.h"
@@ -177,5 +178,6 @@ class BufferPoolManagerInstance : public BufferPoolManager {
   }
 
   // TODO(student): You may add additional private members and helper functions
+  auto GetAvailableFrame(frame_id_t *avilFrameId) -> bool;
 };
 }  // namespace bustub
