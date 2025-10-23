@@ -30,6 +30,7 @@ use crate::compact::{
     CompactionController, CompactionOptions, LeveledCompactionController, LeveledCompactionOptions,
     SimpleLeveledCompactionController, SimpleLeveledCompactionOptions, TieredCompactionController,
 };
+use crate::iterators::merge_iterator::MergeIterator;
 use crate::lsm_iterator::{FusedIterator, LsmIterator};
 use crate::manifest::Manifest;
 use crate::mem_table::MemTable;
@@ -255,7 +256,7 @@ impl LsmStorageInner {
     /// Start the storage engine by either loading an existing directory or creating a new one if the directory does
     /// not exist.
     pub(crate) fn open(path: impl AsRef<Path>, options: LsmStorageOptions) -> Result<Self> {
-        let path = path.as_ref();
+        let path: &Path = path.as_ref();
         let state = LsmStorageState::create(&options);
 
         let compaction_controller = match &options.compaction_options {
@@ -298,22 +299,64 @@ impl LsmStorageInner {
 
     /// Get a key from the storage. In day 7, this can be further optimized by using a bloom filter.
     pub fn get(&self, _key: &[u8]) -> Result<Option<Bytes>> {
-        unimplemented!()
+        let snapshot = {
+            self.state.read().clone() // 获取读锁并立即克隆
+        }; // 临时 RwLockReadGuard 离开作用域，读锁释放
+        //先从memtable中查找
+        if let Some(x) = snapshot.memtable.get(_key) {
+            // 检查是否是删除标记
+            if x.is_empty() {
+                return Ok(None); // 返回 None 表示键已被删除
+            }
+            return Ok(Some(x));
+        }
+        //再从imm_memtables
+        for item in &snapshot.imm_memtables {
+            if let Some(x) = item.get(_key) {
+                if x.is_empty() {
+                    return Ok(None); // 返回 None 表示键已被删除
+                }
+                return Ok(Some(x));
+            }
+        }
+        Ok(None)
     }
 
     /// Write a batch of data into the storage. Implement in week 2 day 7.
     pub fn write_batch<T: AsRef<[u8]>>(&self, _batch: &[WriteBatchRecord<T>]) -> Result<()> {
-        unimplemented!()
+        for record in _batch {
+            match record {
+                WriteBatchRecord::Put(key, value) => {
+                    let similar_size;
+                    {
+                        let write_guard = self.state.write();
+                        write_guard.memtable.put(key.as_ref(), value.as_ref())?;
+                        similar_size = write_guard.memtable.approximate_size();
+                    } //获取写锁进行key_value插入操作，然后释放写锁
+                    self.try_freeze(similar_size)?;
+                }
+                WriteBatchRecord::Del(key) => {
+                    let similar_size: usize;
+                    {
+                        let write_guard = self.state.write();
+                        write_guard.memtable.put(key.as_ref(), b"")?;
+                        similar_size = write_guard.memtable.approximate_size();
+                    }
+                    self.try_freeze(similar_size)?;
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Put a key-value pair into the storage by writing into the current memtable.
     pub fn put(&self, _key: &[u8], _value: &[u8]) -> Result<()> {
-        unimplemented!()
+        self.write_batch(&[WriteBatchRecord::Put(_key, _value)])
     }
 
     /// Remove a key from the storage by writing an empty value.
     pub fn delete(&self, _key: &[u8]) -> Result<()> {
-        unimplemented!()
+        self.write_batch(&[WriteBatchRecord::Del(_key)])
     }
 
     pub(crate) fn path_of_sst_static(path: impl AsRef<Path>, id: usize) -> PathBuf {
@@ -335,10 +378,36 @@ impl LsmStorageInner {
     pub(super) fn sync_dir(&self) -> Result<()> {
         unimplemented!()
     }
-
+    pub fn try_freeze(&self, similar_size: usize) -> Result<()> {
+        if similar_size >= self.options.num_memtable_limit {
+            //memtable大小已满，转冻结
+            let mutex_guard = self.state_lock.lock();
+            let read_guard = self.state.read();
+            //等其他线程结束获取锁后再次判断需不需要转冻结，有可能其他线程已经完成了冻结操作
+            if read_guard.memtable.approximate_size() >= self.options.num_memtable_limit {
+                drop(read_guard);
+                self.force_freeze_memtable(&mutex_guard)?;
+            }
+        }
+        Ok(())
+    }
     /// Force freeze the current memtable to an immutable memtable
     pub fn force_freeze_memtable(&self, _state_lock_observer: &MutexGuard<'_, ()>) -> Result<()> {
-        unimplemented!()
+        {
+            let mut guard = self.state.write();
+            let mut state = guard.as_ref().clone();
+
+            // 创建新的 memtable 替换当前的
+            let new_memtable = Arc::new(MemTable::create(0));
+            // 使用 std::mem::replace 原子性地替换
+            let old_memtable = std::mem::replace(&mut state.memtable, new_memtable);
+            // 将旧的 memtable 插入到 imm_memtables 的序号 0 位置
+            state.imm_memtables.insert(0, old_memtable);
+            // 更新状态
+            *guard = Arc::new(state);
+        }
+
+        Ok(())
     }
 
     /// Force flush the earliest-created immutable memtable to disk
@@ -357,6 +426,16 @@ impl LsmStorageInner {
         _lower: Bound<&[u8]>,
         _upper: Bound<&[u8]>,
     ) -> Result<FusedIterator<LsmIterator>> {
-        unimplemented!()
+        let read_guard = self.state.read();
+        let state = read_guard.as_ref().clone();
+        let memtable = state.memtable;
+
+        let table_iter = memtable.scan(_lower, _upper);
+        let mut iter = Vec::new();
+        iter.push(Box::new(table_iter));
+        let mer_iter = MergeIterator::create(iter);
+
+        let lsm_iter = LsmIterator::new(mer_iter).unwrap();
+        Ok(FusedIterator::new(lsm_iter))
     }
 }
