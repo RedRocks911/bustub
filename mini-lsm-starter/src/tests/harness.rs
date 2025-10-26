@@ -94,7 +94,7 @@ impl StorageIterator for MockIterator {
     fn is_valid(&self) -> bool {
         if let Some(error_when) = self.error_when {
             if self.index >= error_when {
-                //panic!("invalid access after next returns an error!");
+                panic!("invalid access after next returns an error!");
             }
         }
         self.index < self.data.len()
