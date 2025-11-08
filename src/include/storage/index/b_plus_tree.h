@@ -81,7 +81,16 @@ class BPlusTree {
   void ToGraph(BPlusTreePage *page, BufferPoolManager *bpm, std::ofstream &out) const;
 
   void ToString(BPlusTreePage *page, BufferPoolManager *bpm) const;
+  auto FindLeafPage(const KeyType &key) const -> LeafPage *;
+  auto SplitLeafPage(LeafPage *page) -> page_id_t;
+  auto InsertLeafPage(const KeyType &key, const ValueType &value, Transaction *transaction) -> void;
+  bool isRedistribute(N *node);
+  bool isCoalesce(N *lNode, N *rNode);
+  void Redistribute(N *lNode, N *rNode, InternalPage *parent, int index, Transaction *transaction);
+  void Coalesce(N *lNode, N *rNode, InternalPage *parent, int index, Transaction *transaction);
+  void SolveOverflow(N *node, Transaction *transaction);
 
+  
   // member variable
   std::string index_name_;
   page_id_t root_page_id_;
